@@ -1,156 +1,371 @@
 ## Práctica 5. Reconocimiento de matrículas
 
-### Contenidos
+## Introducción
 
-[Tarea](#51-tarea)  
-[YOLOv8](#52-yolov8)  
-[OCRs](#53-ocrs)  
+Para la realización de esta tarea hemos definido un pipeline del procesado paso a paso necesario para transformar la imagen de entrada a una lectura de matricula fiable.
 
-<!--[YOLOv7](#52-yolov7)  -->
+El esquema sería el siguiente
 
+![image pipeline](./resources/pipeline.png)
 
-## 5.1 Tarea
+Como podemos observar nuestro pipeline esta segmentado en cuatro etapas. Cada una de ellas se ha tratado de forma abstracta con interfaces que en un futuro podrán permitir el cambio de tecnologías y la modularidad del código realizado.
 
-En esta práctica describo en primer término la tarea:  **El objetivo es desarrollar un prototipo de sistema que identifique la matrícula de un vehículo, bien desde una imagen o desde un vídeo**.
+1. PlateDetector: esta sería la etapa dedicada a la detección de las diferentes mátriculas.
+2. TextProccesor: esta etapa cogería la imagen resultante de la mátricula y la trataria para que el texto sea mas legible para la siguiente etapa.
+3. TextExtractor: esta etapa cogería la matricula ya tratada y extraeria el texto a partir de un OCR.
+4. TextMatcher: comprobaría que el resultado de la extracción del texto cumple el formato requerido para ser considerado una mátricula.
 
-Nos centraremos en matrículas españolas, siendo una primera subtarea recopilar o capturar imágenes o vídeos que contengan vehículos con su matrícula visible. Si necesitan cámaras, trípode, etc. hablen conmigo.
+## Detección de mátriculas
 
-Si bien cuentan con libertad a la hora de escoger los módulos que integren en el prototipo, les propongo los siguientes apartados un detector de objetos, que permita localizar vehículos, y un reconocedor de texto, para el que deberán definir alguna estrategia de cara a que se focalice en las zonas de probable presencia de la matrícula. En una primera fase, las zonas probables se asumen que corresponden a zonas rectangulares (su contorno lo es), y en una segunda fase, les propongo crear un detector de matrículas basado en YOLOv8.
+La interfaz que hemos creado para la detección de mátriculas es la siguiente
 
-
-
-<!--
-## 5.2 YOLOv7
-
-La familia de detectores de YOLO cuenta con mucho tirón en años recientes dada su velicidad y calidad de detección. En esta línea la reciente propuesta de
-[YOLOv7](https://github.com/WongKinYiu/yolov7) declara [batir los registros](https://amalaj7.medium.com/yolov7-now-outperforms-all-known-object-detectors-fd7170e8542d) de versiones previas.
-
-En los dos enlaces previos se incluyen instrucciones de instalación. En mi experiencia para su instalación en Windows, en primer lugar me he colocado en la carpeta en la que quiero descargar y tecleado los siguientes comandos:
-
-```
-git clone https://github.com/WongKinYiu/yolov7.git
-cd yolov7
-conda create -n yolov7 python=3.9 -y   
-conda activate yolov7
-pip install -r requirements.txt
+```python
+class PlateDetector(ABC):
+    @abstractmethod
+    def detect(self, img: array) -> list[array]:
+        pass
 ```
 
-Una vez finalizados, no he tenido problemas en ejecutar procesando con la CPU. Les muestro un resumen
-de llamadas al demostrados *detect.py* procesando una carpeta de imágenes, un vídeo o directamente desde la cámara web:
+Como sabemos en python no existen las interfaces por lo tanto lo hemos implementado como una clase abstracta. Esta recive una imagen y devuelve una lista de imagenes puesto que en una foto podría haber varias matriculas.
 
-```
-#Inferencia
-python detect.py --weights yolov7.pt --conf 0.25 --img-size 640 --source rutaalacarpetaconimágenes\ --view-img --device cpu
+La implementación que hemos realizado esta interfaz ha sido con Yolov8. Hemos entrenado el modelo con el siguiente dataset para poder detectar mátriculas.
 
-#De vídeo almacenado
-python detect.py --weights yolov7.pt --conf 0.25 --img-size 640 --source inference/bird.mp4 --view-img --device cpu
+https://universe.roboflow.com/roboflow-universe-projects/license-plate-recognition-rxg4e
 
-#webcam
-python detect.py --weights yolov7.pt --conf 0.25 --img-size 640 --source 0 --device cpu
 
-#webcam GPU
-python detect.py --weights yolov7.pt --conf 0.25 --img-size 640 --source 0 --device 0
-```
+```python
+class YOLOPlateDetector(PlateDetector):
+    def __init__(self, model, category = 0, image_processors = list()):
+        self.model = model
+        self.category = category
+        self.image_processors = image_processors
 
-Creo que apreciarán que no va muy lento. Como en el PC del despacho tengo una GPU, he intentado configurar el
-*environment* para poder usarla con el demostrador. Sin embargo hasta ahora no he tenido fortuna, pese a tener instalado CUDA y considerar haber seguido la documentación de [pytorch](https://pytorch.org/get-started/locally/),
-para instalar la combinación de
-CUDA, pytorch, torchvision y cudatoolkit con el supuesto comando:
-
-```
-conda install pytorch==1.12.1 torchvision==0.13.1 cudatoolkit=11.4 -c pytorch
-```
-
-Pese a ello, CUDA sigue mostrándose no disponible. Lo he comprobado al teclear
-
-```
-import torch
-print(torch.cuda.is_available())
-```
-
-Me sigue devolviendo *false*. En cualquier caso, me va con CPU con aceptable tasa de fotogramas por segundo con la webcam, por lo que parece viable u uso aún sin GPU. Ustedes aportarán más visiones y experiencias.
--->
-
-## 5.2 YOLOv8
-
-<!-- environment VC_P1 e portátil -->
-
-Durante este año 2023, Ultralytics presenta yolov8. Para su instalación en el environment *VC_P1* he seguido los pasos del  [tutorial de instalación de Ultralytics] (https://docs.ultralytics.com/quickstart/#install-ultralytics). No dejes de lado la [documentación](https://docs.ultralytics.com)
-
-```
-pip install ultralytics
-
+    def detect(self, img):
+        from ultralytics import YOLO
+        model = YOLO(self.model)
+        results = model(img)
+        cars = []
+        for x in results:
+            boxes = x.boxes
+            for box in boxes:
+                x1, y1, x2, y2 = box.xyxy[0]
+                x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
+                category = int(box.cls[0])
+                if category == 0:
+                    img = img[y1:y2, x1:x2]
+                    for x in self.image_processors:
+                        img = x.process(img)
+                    cars.append(img)
+        return cars
 ```
 
-Ha sido muy poco engorroso en mi experiencia. Una vez instalada, puede ejecutarse desde línea decomandos con algo como:
+### Procesado de la matricula
 
+Esta etapa sería la segunda en nuestro pipeline. Esta encargada deprocesar las diferentes mátriculas con filtros usados en la asignatura como Canny, Threshold etc. de forma que al OCR se le facilite la tarea de detección.
 
-<!-- yolo detect predict model=yolov8n.pt source="C:/Users/otsed/Desktop/RUNNERS_ILUSOS/Multimedia/Bibs/TGC23_PdH_C0056_resultado.mp4"  -->
-```
-yolo detect predict model=yolov8n.pt source="rutavideo"
-```
+Aunque siendo honestos ha funcionado mejor sin ningún tipo de filtros. Pensabamos que al extraer los bordes nada mas con Canny o aplicar ciertos thresholds para eliminar colores diferentes del blanco y negro funcionaría mejor pero no ha sido así. Es más, ha funcionado incluso peor en varios casos.
 
-Con el parámetro model se define el modelo preentrenado a utilizar, los resultados los almacena en una carpeta *runs/detect/predict*. Los distintos parámetros de la ejecución se describen en la documentación del modo [*predict*](https://docs.ultralytics.com/modes/predict/). El modelo escogido detecta contenedores, para la segmentación semántica sugerir por ejemplo el modelo *yolov8n-seg.pt*.
+Esta sería la interfaz de un procesador de matricula.
 
-<!--A este segundo también le añadí la opción "device" para decirle qué tarjetas tiene que usar.-->
-
-En las primeras celdas del cuaderno ejemplo, *VC_P5.ipynb*, se incluye un ejemplo de procesamiento y dibujado de las cajas contenedoras haciendo uso de un modelo desde código python. Se presentan todas las clases sin realizar ningún tipo de filtrado.
-
-
-
-
-<!--
-
-https://stackoverflow.com/questions/75714505/how-to-only-detect-person-class-from-yolov8
-
-El código para entrenar es este:
-
+```python
+class ImageProcessor(ABC):
+    @abstractmethod
+    def process(self, img: array) -> array:
+        pass
 ```
 
-yolo detect train model=yolov8n.pt data=experiment3.yaml imgsz=1920 batch=8 device=0,1,2,3 epochs=100
+Como podemos observar recibe una imagen y devuelve otra imagen procesada.
+
+Hemos realizado varias implementaciones de esta interfaz. Una para aplicar Canny, otra para Sobel, otra para Threshold y un intento con FindCountours.
+
+```python
+class CannyImageProcessor(ImageProcessor):
+    def __init__(self, x, y):
+        self.x = x
+        self.y = y
+
+    def process(self, img: array) -> array:
+        #apply Canny
+        import cv2 as cv
+        import matplotlib.pyplot as plt
+        canny = cv.Canny(img, self.x, self.y)
+        plt.imshow(canny)
+        plt.show()
+        return canny
+
+class SobelImageProcessor(ImageProcessor):
+    def __init__(self, x, y):
+        self.x = x
+        self.y = y
+
+    def process(self, img: array) -> array:
+        #apply Sobel
+        import cv2 as cv
+        import matplotlib.pyplot as plt
+        sobel = cv.Sobel(img, cv.CV_8U, self.x, self.y, ksize=5)
+        plt.imshow(sobel)
+        plt.show()
+        return sobel
+
+
+class ColorThresholdImageProcessor(ImageProcessor):
+    def __init__(self, lower, upper):
+        self.lower = lower
+        self.upper = upper
+    
+    def process(self, img: array) -> array:
+        import cv2 as cv
+        import matplotlib.pyplot as plt
+        img = cv.cvtColor(img, cv.COLOR_BGR2GRAY)
+        #extract only black colors
+        mask = cv.inRange(img, self.lower, self.upper)
+        img = cv.bitwise_and(img, img, mask=mask)
+
+        plt.imshow(img)
+        plt.show()
+        return img
+
+class ContoursImageProcessor(ImageProcessor):
+    def process(self, image: array) -> array:
+        import cv2
+        import numpy as np
+        import matplotlib.pyplot as plt
+
+        mask = np.ones(image.shape, dtype=np.uint8) * 255
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)[1]
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5,5))
+        dilate = thresh
+
+        cnts = cv2.findContours(dilate, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+        cnts = cnts[0] if len(cnts) == 2 else cnts[1]
+        for c in cnts:
+            area = cv2.contourArea(c)
+            if area < 300:
+                x,y,w,h = cv2.boundingRect(c)
+                mask[y:y+h, x:x+w] = image[y:y+h, x:x+w]
+        
+        plt.imshow(mask)
+        plt.show()
+        return mask
+```
+
+Como podemos observar estos se añaden al detector de mátriculas en forma de lista para poder mezclar varios filtros.
+
+```
+plate_detector = YOLOPlateDetector(model='plate_recognizer.pt', image_processors=[
+        CannyImageProcessor(0, 100),
+        ColorThresholdImageProcessor((0, 0, 0), (120, 120, 120))
+    ]
+)
+```
+
+### Extractor del texto
+
+Por último quedaría coger las imagenes procesadas y extraer el correspondiente texto de ellas.
+
+Para esto hemos creado la siguiente interfaz
+
+```python
+class TextExtractor(ABC):
+    def __init__(self, matcher : PlateMatcher, processor : TextProcessor):
+        self.matcher = matcher
+        self.processor = processor
+
+    @abstractmethod
+    def extract(self, img: array) -> str:
+        pass
+```
+
+Y la hemos implementado con EasyOCR, TesseractOCR y KerasOCR, siendo la que mejores resultados a dado EasyOCR.
+
+```python
+class TesseractTextExtractor(TextExtractor):
+    def extract(self, img):
+        import pytesseract
+        pytesseract.pytesseract.tesseract_cmd = r'/usr/local/bin/tesseract'
+        text = pytesseract.image_to_string(img)
+        matcher = RegexPlateMatcher()
+        if matcher.match(text):
+            text = self.processor.process(text)
+            return text
+        
+class EasyOCRTextExtractor(TextExtractor):
+    def extract(self, img):
+        import easyocr
+        reader = easyocr.Reader(['es']) 
+        result = reader.readtext(img)
+        if(len(result) == 0): return ""
+        for x in result:
+            text = x[1]
+            text = self.processor.process(text)
+            if(self.matcher.match(text)):
+                return text
+
+class KerasOCRTextExtractor(TextExtractor):
+    def extract(self, img):
+        from keras_ocr.detection import Detector
+        from keras_ocr.recognition import Recognizer
+        from keras_ocr import pipeline
+
+        detector = Detector()
+        recognizer = Recognizer()
+        pipeline = pipeline.Pipeline(detector=detector, recognizer=recognizer)
+        prediction_groups = pipeline.recognize([img])
+        for group in prediction_groups:
+            for word in group:
+                text = word[0]
+                text = self.processor.process(text)
+                if(self.matcher.match(text)):
+                    return text
 ```
 
 
-[YOLO-NAS](https://github.com/Deci-AI/super-gradients/blob/master/documentation/source/YoloNASQuickstart.md) para mejorar con objetos pequeños y pocos recursos ...
+### Identificadores de texto
 
+Los identificadores de texto son usados para saber si el texto detectado por la etapa anterior corresponde al formato buscado. De esta forma podremos descartar detecciones erroneas.
 
--->
+La interfaz usada para este labor es la siguiente
 
-### 5.3. OCRs
-
-Como reconocedores de caracteres, les propongo dos opciones disponibles.
-Para ambos se incluyen demostradores mínimos en el cuaderno proporcionado esta semana.
-<!-- Al ser un nuevo *environment* no olvidar  que es necesario instalar el paquete para ejecutar cuadernos, desde consola-->
-
-
-Por un lado, el conocido [Tesseract](https://github.com/tesseract-ocr/tesseract), para el que desde python será necesario un wrapper, además de instalarlo previamente.
-La documentación de [Tesseract](https://tesseract-ocr.github.io/tessdoc/Installation.html) dispone de información para su instalación en distintos sistemas operativos
-Para entorno Windows, siguiendo las instrucciones de la mencionada documentación, me he descargado los binarios desde el repositorio para tal fin de la [Universidad Manheim](https://github.com/UB-Mannheim/tesseract/wiki). Al instalar he indicado que incluya datos de otros lenguajes, en mi caso español. Además he anotado la carpeta donde se instala.
-
-El *wrapper* es [pytesseract](https://pypi.org/project/pytesseract/) se instala cómodamente en el *environment* creado en el paso anterior con:
+```python
+class PlateMatcher(ABC):
+    @abstractmethod
+    def match(self, text : str) -> bool:
+        pass
 
 ```
-pip install pytesseract
+
+Se han realizado dos implementaciones, una con longitud de texto y otra con regex
+
+```python
+class LengthPlateMatcher(PlateMatcher):
+    def match(self, text : str) -> bool:
+        if len(text) == 7: return True
+        return False
+
+class RegexPlateMatcher(PlateMatcher):
+    def match(self, text : str) -> bool:
+        import re
+        pattern = re.compile("^[0-9]{4}([B-D]|[F-H]|[J-N]|[P-T]|[V-Z]){3}$")
+        if pattern.match(text):
+            return True
+        else:
+            return False
 ```
 
 
-Por otro lado, [easyOCR](https://github.com/JaidedAI/EasyOCR) que ofrece un cómodo soporte para más de 80 lenguas, cuya instalación es aún más simple, basta con:
+### Mejoras de rendimiento propuestas
+
+Para mejorar el rendimiento se ha probado a implementar multithreading lanzando varios hilos para procesar a la vez multiples iamgenes. El código siguiente ha sido el usado para probar el rendimiento entre una ejecución con normal y otra threads.
+
+Ejecución normal:
+
+```python
+text_extractor=EasyOCRTextExtractor(
+    processor=BasicTextProcessor(), 
+    matcher=LengthPlateMatcher()
+)
+
+
+plate_detector = YOLOPlateDetector(model='plate_recognizer.pt', image_processors=[
+    ]
+)
+
+detector = CarPlateDetector(
+    text_extractor,
+    plate_detector
+)
+
+
+def  detectImage():
+    result = detector.detect('./plates/coches2.jpg')
+    print(result)
+
+for x in range(0, 10):
+    detectImage()
+```
+
+Ejecución con threads:
+
+```python
+import threading 
+
+text_extractor=EasyOCRTextExtractor(
+    processor=BasicTextProcessor(), 
+    matcher=LengthPlateMatcher()
+)
+
+plate_detector = YOLOPlateDetector(model='plate_recognizer.pt')
+
+detector = CarPlateDetector(
+    text_extractor,
+    plate_detector
+)
+
+
+def  detectImage():
+    result = detector.detect('./plates/coches2.jpg')
+
+
+threads = [
+]
+
+def add_threads(num_threads=10):
+    for x in range(0, num_threads):
+        threads.append(threading.Thread(target=detectImage))
+    
+def join_threads():
+    for x in threads:
+        x.start()
+    for x in threads:
+        x.join()
+
+add_threads(10)
+join_threads()
 
 ```
-pip install easyocr
+
+Tardando la ejecución normal 2m y 21 segundos con 10 imagenes. Y la ejecución con threads 29 segundos como se puede apreciar en el notebook. Por lo tanto la mejora si que es substancial. Sin embargo para implementar threads en el video sería necesario código que lanzara un thread por frame. Conociendo la cantidad de frames que tiene un video actual esto sería inviable por limitaciones del procesador. Por lo tanto la implementación en el video se ha realizado sin threads.
+
+### Predicciones en video
+
+El código usado para el video ha sido el siguiente:
+
+```python
+import cv2
+
+cap = cv2.VideoCapture('videos/license_plates_fps.mp4')
+width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) / 2)
+height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) / 2)
+
+processor = BasicTextProcessor()
+# matcher = LengthPlateMatcher()
+matcher = RegexPlateMatcher()
+detector = YOLOPlateDetector(model='plate_recognizer.pt')
+extractor = EasyOCRTextExtractor(matcher, processor)
+
+while True:
+    ret, frame = cap.read()
+    if not ret: break
+
+    frame = cv2.resize(frame, (width, height))
+    plates = detector.detect(frame)
+
+    # Dibujar rectángulos alrededor de las placas detectadas
+    for plate in plates:
+        if len(plate) == 5:  # Asegurarse de que haya cuatro valores en la tupla
+            x1, y1, x2, y2, img = plate
+            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+            detection = extractor.extract(img)
+            if detection == None or detection == '': detection = "unknown plate"
+            cv2.putText(frame, detection, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+
+    cv2.imshow('Plates', frame)
+    if cv2.waitKey(20) == 27: 
+        break
+
+cap.release()
+cv2.destroyAllWindows()
 ```
 
-
-
-
-
-***
-
-
-Llegado a este punto:
-¡¡A jugarrrr!!
-
-
-
-***
-Bajo licencia de Creative Commons Reconocimiento - No Comercial 4.0 Internacional
+A su vez el video lo hemos grabado nosotros mismos en la calle proporcionando un entorno mas realista que los posibles encontrados en internet.
